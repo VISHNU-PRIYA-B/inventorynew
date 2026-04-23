@@ -1,0 +1,445 @@
+import 'package:flutter/material.dart';
+import 'package:graphql_flutter/graphql_flutter.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+const String getInventoryQuery = r'''
+  query {
+    inventoryItems {
+      itemName
+      size
+      length
+      itemType
+      quantity
+      location
+      imagePath
+    }
+    issuedItems {
+      id
+      itemName
+      status
+      issuedAt
+      issuedTo {
+        name
+      }
+    }
+  }
+''';
+
+const String updateInventoryMutation = r'''
+  mutation UpdateInventoryItem(
+    $itemName: String!
+    $department: String!
+    $newItemName: String
+    $itemType: String
+    $size: String
+    $length: String
+    $quantity: Int
+    $location: String
+  ) {
+    updateInventoryItem(
+      itemName: $itemName
+      department: $department
+      newItemName: $newItemName
+      itemType: $itemType
+      size: $size
+      length: $length
+      quantity: $quantity
+      location: $location
+    ) {
+      success
+      message
+    }
+  }
+''';
+
+const String deleteInventoryMutation = r'''
+  mutation DeleteInventoryItem($itemName: String!, $department: String!) {
+    deleteInventoryItem(itemName: $itemName, department: $department) {
+      success
+      message
+    }
+  }
+''';
+
+class InventoryListScreen extends StatefulWidget {
+  const InventoryListScreen({super.key});
+
+  @override
+  State<InventoryListScreen> createState() => _InventoryListScreenState();
+}
+
+class _InventoryListScreenState extends State<InventoryListScreen> {
+  bool _isAdmin = false;
+  String _department = '';
+
+  final String baseUrl = "http://192.168.29.113:8000";
+
+  @override
+  void initState() {
+    super.initState();
+    _loadPrefs();
+  }
+
+  Future<void> _loadPrefs() async {
+    final prefs = await SharedPreferences.getInstance();
+    setState(() {
+      _isAdmin = prefs.getBool('is_admin') ?? false;
+      _department = prefs.getString('department') ?? '';
+    });
+  }
+
+  // ── Edit Dialog ─────────────────────────────────────────────────────────────
+  void _showEditDialog(BuildContext context, Map item, VoidCallback refetch) {
+    final itemNameCtrl = TextEditingController(text: item['itemName'] ?? '');
+    final itemTypeCtrl = TextEditingController(text: item['itemType'] ?? '');
+    final sizeCtrl     = TextEditingController(text: item['size'] ?? '');
+    final lengthCtrl   = TextEditingController(text: item['length'] ?? '');
+    final quantityCtrl = TextEditingController(text: item['quantity'].toString());
+    final locationCtrl = TextEditingController(text: item['location'] ?? '');
+
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A2035),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Edit Item',
+          style: TextStyle(color: Color(0xFFC9A227), fontWeight: FontWeight.bold),
+        ),
+        content: SingleChildScrollView(
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            children: [
+              _editField(itemNameCtrl, 'Item Name'),
+              const SizedBox(height: 10),
+              _editField(itemTypeCtrl, 'Type'),
+              const SizedBox(height: 10),
+              _editField(sizeCtrl, 'Size'),
+              const SizedBox(height: 10),
+              _editField(lengthCtrl, 'Length'),
+              const SizedBox(height: 10),
+              _editField(quantityCtrl, 'Quantity', isNumber: true),
+              const SizedBox(height: 10),
+              _editField(locationCtrl, 'Location'),
+            ],
+          ),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          Mutation(
+            options: MutationOptions(
+              document: gql(updateInventoryMutation),
+              onCompleted: (data) {
+                if (data?['updateInventoryItem']['success'] == true) {
+                  Navigator.pop(ctx);
+                  refetch();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Item updated successfully'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                }
+              },
+            ),
+            builder: (runMutation, result) {
+              return ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: const Color(0xFFC9A227),
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () {
+                  runMutation({
+                    'itemName':    item['itemName'],
+                    'department':  _department,
+                    'newItemName': itemNameCtrl.text.trim(),
+                    'itemType':    itemTypeCtrl.text.trim(),
+                    'size':        sizeCtrl.text.trim(),
+                    'length':      lengthCtrl.text.trim(),
+                    'quantity':    int.tryParse(quantityCtrl.text.trim()) ?? item['quantity'],
+                    'location':    locationCtrl.text.trim(),
+                  });
+                },
+                child: const Text('Save', style: TextStyle(color: Colors.black)),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  // ── Delete Confirm Dialog ───────────────────────────────────────────────────
+  void _showDeleteDialog(BuildContext context, Map item, VoidCallback refetch) {
+    showDialog(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A2035),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: const Text(
+          'Delete Item',
+          style: TextStyle(color: Colors.redAccent, fontWeight: FontWeight.bold),
+        ),
+        content: Text(
+          'Are you sure you want to delete "${item['itemName']}"?',
+          style: const TextStyle(color: Colors.white70),
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(ctx),
+            child: const Text('Cancel', style: TextStyle(color: Colors.white54)),
+          ),
+          Mutation(
+            options: MutationOptions(
+              document: gql(deleteInventoryMutation),
+              onCompleted: (data) {
+                if (data?['deleteInventoryItem']['success'] == true) {
+                  Navigator.pop(ctx);
+                  refetch();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                      content: Text('Item deleted successfully'),
+                      backgroundColor: Colors.redAccent,
+                    ),
+                  );
+                }
+              },
+            ),
+            builder: (runMutation, result) {
+              return ElevatedButton(
+                style: ElevatedButton.styleFrom(
+                  backgroundColor: Colors.redAccent,
+                  shape: RoundedRectangleBorder(
+                      borderRadius: BorderRadius.circular(10)),
+                ),
+                onPressed: () {
+                  runMutation({
+                    'itemName':   item['itemName'],
+                    'department': _department,
+                  });
+                },
+                child: const Text('Delete', style: TextStyle(color: Colors.white)),
+              );
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _editField(TextEditingController ctrl, String label,
+      {bool isNumber = false}) {
+    return TextField(
+      controller: ctrl,
+      keyboardType: isNumber ? TextInputType.number : TextInputType.text,
+      style: const TextStyle(color: Colors.white),
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.white54),
+        filled: true,
+        fillColor: const Color(0xFF0A0E1A),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(10),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0E1A),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0A0E1A),
+        elevation: 0,
+        title: const Text(
+          "Lists",
+          style: TextStyle(color: Color(0xFFC9A227)),
+        ),
+        iconTheme: const IconThemeData(color: Colors.white),
+      ),
+      body: Query(
+        options: QueryOptions(
+          document: gql(getInventoryQuery),
+          fetchPolicy: FetchPolicy.networkOnly,
+        ),
+        builder: (result, {fetchMore, refetch}) {
+          if (result.isLoading) {
+            return const Center(
+              child: CircularProgressIndicator(color: Colors.white),
+            );
+          }
+
+          if (result.hasException) {
+            return Center(
+              child: Text(
+                result.exception.toString(),
+                style: const TextStyle(color: Colors.red),
+              ),
+            );
+          }
+
+          final List issued = result.data?['issuedItems'] ?? [];
+          final List items  = result.data?['inventoryItems'] ?? [];
+
+          final sortedIssued = List.from(issued);
+          sortedIssued.sort((a, b) {
+            final aTime = a['issuedAt'] ?? '';
+            final bTime = b['issuedAt'] ?? '';
+            return aTime.compareTo(bTime);
+          });
+
+          final Map<String, String> acceptedUserMap = {};
+          for (final issuedItem in sortedIssued) {
+            final status   = (issuedItem['status'] ?? '').toString().toLowerCase();
+            final issuedTo = issuedItem['issuedTo'];
+            final name     = (issuedTo != null && issuedTo['name'] != null)
+                ? issuedTo['name'].toString().trim()
+                : '';
+            if (status == 'accepted' && name.isNotEmpty) {
+              acceptedUserMap[issuedItem['itemName'] ?? ''] = name;
+            }
+          }
+
+          // Build columns — add Actions column for admin
+          final columns = [
+            const DataColumn(label: Text("Item",     style: TextStyle(color: Colors.white))),
+            const DataColumn(label: Text("Type",     style: TextStyle(color: Colors.white))),
+            const DataColumn(label: Text("Size",     style: TextStyle(color: Colors.white))),
+            const DataColumn(label: Text("Length",   style: TextStyle(color: Colors.white))),
+            const DataColumn(label: Text("Location", style: TextStyle(color: Colors.white))),
+            const DataColumn(label: Text("Qty",      style: TextStyle(color: Colors.white))),
+            const DataColumn(label: Text("Image",    style: TextStyle(color: Colors.white))),
+            const DataColumn(label: Text("User",     style: TextStyle(color: Colors.white))),
+            if (_isAdmin)
+              const DataColumn(label: Text("Actions", style: TextStyle(color: Color(0xFFC9A227)))),
+          ];
+
+          final rows = items.map<DataRow>((item) {
+            final itemName  = item['itemName'] ?? '';
+            final imagePath = item['imagePath'];
+            final userName  = acceptedUserMap[itemName] ?? '-';
+
+            return DataRow(cells: [
+              DataCell(Text(itemName,
+                  style: const TextStyle(color: Colors.white))),
+
+              DataCell(Text(item['itemType'] ?? '',
+                  style: const TextStyle(color: Colors.white))),
+
+              DataCell(Text(item['size'] ?? '',
+                  style: const TextStyle(color: Colors.white))),
+
+              DataCell(Text(item['length'] ?? '',
+                  style: const TextStyle(color: Colors.white))),
+
+              DataCell(Text(item['location'] ?? '',
+                  style: const TextStyle(color: Colors.white))),
+
+              DataCell(Text(item['quantity'].toString(),
+                  style: const TextStyle(
+                      color: Colors.white, fontWeight: FontWeight.bold))),
+
+              // Image
+              DataCell(
+                (imagePath != null &&
+                        imagePath.toString().trim().isNotEmpty &&
+                        imagePath.toString().trim() != 'nan')
+                    ? ElevatedButton(
+                        style: ElevatedButton.styleFrom(
+                            backgroundColor: const Color(0xFFC9A227)),
+                        onPressed: () {
+                          showDialog(
+                            context: context,
+                            builder: (_) => Dialog(
+                              backgroundColor: const Color(0xFF1A2035),
+                              child: Padding(
+                                padding: const EdgeInsets.all(10),
+                                child: Image.network(
+                                  "$baseUrl$imagePath",
+                                  fit: BoxFit.contain,
+                                  loadingBuilder:
+                                      (context, child, loadingProgress) {
+                                    if (loadingProgress == null) return child;
+                                    return const SizedBox(
+                                      height: 150,
+                                      child: Center(
+                                          child: CircularProgressIndicator(
+                                              color: Colors.white)),
+                                    );
+                                  },
+                                  errorBuilder: (context, error, stackTrace) =>
+                                      const Text("Failed to load image",
+                                          style: TextStyle(color: Colors.red)),
+                                ),
+                              ),
+                            ),
+                          );
+                        },
+                        child: const Text("View",
+                            style: TextStyle(color: Colors.black)),
+                      )
+                    : const Text("No Image",
+                        style: TextStyle(color: Colors.grey)),
+              ),
+
+              // User
+              DataCell(Text(
+                userName,
+                style: TextStyle(
+                  color: userName == '-'
+                      ? Colors.white38
+                      : const Color(0xFFC9A227),
+                ),
+              )),
+
+              // Admin-only Edit & Delete buttons
+              if (_isAdmin)
+                DataCell(
+                  Row(
+                    children: [
+                      // Edit button
+                      IconButton(
+                        icon: const Icon(Icons.edit,
+                            color: Color(0xFFC9A227), size: 20),
+                        tooltip: 'Edit',
+                        onPressed: () =>
+                            _showEditDialog(context, item, refetch!),
+                      ),
+                      // Delete button
+                      IconButton(
+                        icon: const Icon(Icons.delete,
+                            color: Colors.redAccent, size: 20),
+                        tooltip: 'Delete',
+                        onPressed: () =>
+                            _showDeleteDialog(context, item, refetch!),
+                      ),
+                    ],
+                  ),
+                ),
+            ]);
+          }).toList();
+
+          return SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: SingleChildScrollView(
+              child: DataTable(
+                headingRowColor:
+                    MaterialStateProperty.all(const Color(0xFF1A2035)),
+                dataRowColor:
+                    MaterialStateProperty.all(const Color(0xFF0A0E1A)),
+                columns: columns,
+                rows: rows,
+              ),
+            ),
+          );
+        },
+      ),
+    );
+  }
+}
