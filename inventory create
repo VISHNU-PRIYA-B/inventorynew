@@ -1,0 +1,669 @@
+import 'dart:convert';
+import 'dart:io';
+import 'package:flutter/material.dart';
+import 'package:graphql_flutter/graphql_flutter.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:image_picker/image_picker.dart';
+import 'inventory_list_screen.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+const String addInventoryMutation = r'''
+mutation AddInventoryItem(
+  $itemName: String!
+  $itemType: String!
+  $size: String!
+  $length: String!
+  $department: String!
+  $quantity: Int!
+  $location: String!
+  $description: String!
+  $imageBase64: String
+) {
+  addInventoryItem(
+    itemName: $itemName
+    itemType: $itemType
+    size: $size
+    length: $length
+    department: $department
+    quantity: $quantity
+    location: $location
+    description: $description
+    imageBase64: $imageBase64
+  ) {
+    success
+    message
+  }
+}
+''';
+
+const String getInventoryItems = r'''
+query {
+  inventoryItems {
+    itemType
+    itemName
+    size
+    length
+  }
+}
+''';
+
+// ✅ Use a value that can NEVER appear in real data
+const String _kAddNew = '__add_new__';
+
+class InventoryScreen extends StatefulWidget {
+  const InventoryScreen({super.key});
+
+  @override
+  State<InventoryScreen> createState() => _InventoryScreenState();
+}
+
+class _InventoryScreenState extends State<InventoryScreen>
+    with SingleTickerProviderStateMixin {
+
+  final _formKey = GlobalKey<FormState>();
+  final _locationCtrl = TextEditingController();
+  final _descCtrl = TextEditingController();
+  final TextEditingController _quantityCtrl = TextEditingController(text: "1");
+
+  int _quantity = 1;
+
+  Map<String, List<String>> _categoryItems = {};
+
+  String? _selectedCategory;
+  String? _selectedItemName;
+
+  String? _selectedSize;
+  List<String> _sizes = [];
+
+  String? _selectedLength;
+  List<String> _lengths = [];
+
+  XFile? _pickedImage;
+  bool _loading = false;
+  bool _dataLoaded = false;
+
+  late AnimationController _animCtrl;
+  late Animation<double> _fadeAnim;
+
+  @override
+  void initState() {
+    super.initState();
+    _animCtrl = AnimationController(
+        vsync: this, duration: const Duration(milliseconds: 600));
+    _fadeAnim = CurvedAnimation(parent: _animCtrl, curve: Curves.easeOut);
+    _animCtrl.forward();
+  }
+
+  void _loadFromBackend(QueryResult result) {
+    if (_dataLoaded) return;
+
+    final items = result.data?['inventoryItems'] ?? [];
+
+    Map<String, List<String>> tempCategoryItems = {};
+    // ✅ Use Sets first to guarantee uniqueness, then convert to List
+    Set<String> tempSizes = {};
+    Set<String> tempLengths = {};
+
+    for (var item in items) {
+      String category = (item['itemType'] ?? '').toString().trim();
+      String name     = (item['itemName'] ?? '').toString().trim();
+      String size     = (item['size']     ?? '').toString().trim();
+      String length   = (item['length']   ?? '').toString().trim();
+
+      // Skip blank or sentinel values
+      if (category.isEmpty || category == _kAddNew) continue;
+
+      tempCategoryItems.putIfAbsent(category, () => []);
+
+      if (name.isNotEmpty &&
+          name != _kAddNew &&
+          !tempCategoryItems[category]!.contains(name)) {
+        tempCategoryItems[category]!.add(name);
+      }
+
+      if (size.isNotEmpty && size != _kAddNew) tempSizes.add(size);
+      if (length.isNotEmpty && length != _kAddNew) tempLengths.add(length);
+    }
+
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      setState(() {
+        _categoryItems = tempCategoryItems;
+        _sizes   = tempSizes.toList();
+        _lengths = tempLengths.toList();
+        _dataLoaded = true;
+      });
+    });
+  }
+
+  Future<void> _saveOptions() async {
+    final prefs = await SharedPreferences.getInstance();
+    await prefs.setString('inv_category_items', jsonEncode(_categoryItems));
+    await prefs.setString('inv_sizes',   jsonEncode(_sizes));
+    await prefs.setString('inv_lengths', jsonEncode(_lengths));
+  }
+
+  @override
+  void dispose() {
+    _animCtrl.dispose();
+    _locationCtrl.dispose();
+    _descCtrl.dispose();
+    _quantityCtrl.dispose();
+    super.dispose();
+  }
+
+  Future<void> _pickImage() async {
+    final picker = ImagePicker();
+    final picked =
+        await picker.pickImage(source: ImageSource.gallery, imageQuality: 75);
+    if (picked != null) setState(() => _pickedImage = picked);
+  }
+
+  Future<String> _encodeImage(XFile file) async {
+    final bytes = await File(file.path).readAsBytes();
+    final ext   = file.path.split('.').last.toLowerCase();
+    final mime  = ext == 'png' ? 'image/png' : 'image/jpeg';
+    return 'data:$mime;base64,${base64Encode(bytes)}';
+  }
+
+  void _submitForm(RunMutation runMutation) async {
+    if (!_formKey.currentState!.validate()) return;
+
+    if (_selectedCategory == null ||
+        _selectedItemName  == null ||
+        _selectedSize      == null ||
+        _selectedLength    == null) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(
+          content: Text('Please select all dropdown fields'),
+          backgroundColor: Colors.orangeAccent,
+        ),
+      );
+      return;
+    }
+
+    setState(() => _loading = true);
+
+    final prefs    = await SharedPreferences.getInstance();
+    String department = prefs.getString('department') ?? '';
+
+    String imageBase64 = '';
+    if (_pickedImage != null) imageBase64 = await _encodeImage(_pickedImage!);
+
+    runMutation({
+      'itemName':    _selectedItemName!,
+      'itemType':    _selectedCategory!,
+      'size':        _selectedSize!,
+      'length':      _selectedLength!,
+      'department':  department,
+      'quantity':    _quantity,
+      'location':    _locationCtrl.text.trim(),
+      'description': _descCtrl.text.trim(),
+      'imageBase64': imageBase64,
+    });
+  }
+
+  void _resetForm() {
+    _formKey.currentState?.reset();
+    _locationCtrl.clear();
+    _descCtrl.clear();
+    _quantityCtrl.text = "1";
+    setState(() {
+      _selectedCategory = null;
+      _selectedItemName = null;
+      _selectedSize     = null;
+      _selectedLength   = null;
+      _pickedImage      = null;
+      _quantity         = 1;
+    });
+  }
+
+  Future<void> _showAddDialog({
+    required String label,
+    required void Function(String value) onConfirm,
+  }) async {
+    final ctrl = TextEditingController();
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (ctx) => AlertDialog(
+        backgroundColor: const Color(0xFF1A2035),
+        shape: RoundedRectangleBorder(borderRadius: BorderRadius.circular(16)),
+        title: Text('Add New $label'),
+        content: TextField(controller: ctrl),
+        actions: [
+          TextButton(
+              onPressed: () => Navigator.pop(ctx, false),
+              child: const Text('Cancel')),
+          ElevatedButton(
+              onPressed: () => Navigator.pop(ctx, true),
+              child: const Text('Add')),
+        ],
+      ),
+    );
+    if (confirmed == true && ctrl.text.trim().isNotEmpty) {
+      onConfirm(ctrl.text.trim());
+    }
+  }
+
+  // ─── Helper: build a safe deduplicated item list + "Add New" sentinel ───────
+  /// Returns items for a dropdown, guaranteeing no duplicates and that
+  /// _kAddNew never appears in the real-data portion.
+  List<DropdownMenuItem<String>> _buildItems(List<String> values) {
+    final seen = <String>{};
+    final deduped = <String>[];
+    for (final v in values) {
+      final trimmed = v.trim();
+      if (trimmed.isNotEmpty && trimmed != _kAddNew && seen.add(trimmed)) {
+        deduped.add(trimmed);
+      }
+    }
+    return [
+      ...deduped.map((v) => DropdownMenuItem(value: v, child: Text(v))),
+      const DropdownMenuItem(value: _kAddNew, child: Text('+ Add New')),
+    ];
+  }
+
+  // ─── Helper: safe current value (null if not in list) ────────────────────
+  String? _safeValue(String? value, List<String> values) {
+    if (value == null || value == _kAddNew) return null;
+    return values.contains(value) ? value : null;
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0E1A),
+      appBar: AppBar(
+        backgroundColor: const Color(0xFF0A0E1A),
+        elevation: 0,
+        title: const Text('Add Inventory Item'),
+      ),
+      body: Query(
+        options: QueryOptions(
+          document: gql(getInventoryItems),
+          fetchPolicy: FetchPolicy.networkOnly,
+        ),
+        builder: (queryResult, {fetchMore, refetch}) {
+          if (queryResult.isLoading) {
+            return const Center(child: CircularProgressIndicator());
+          }
+          if (queryResult.hasException) {
+            return Center(child: Text(queryResult.exception.toString()));
+          }
+          if (!_dataLoaded && queryResult.data != null) {
+            _loadFromBackend(queryResult);
+          }
+
+          return Mutation(
+            options: MutationOptions(
+              document: gql(addInventoryMutation),
+              onCompleted: (data) {
+                setState(() {
+                  _loading    = false;
+                  _dataLoaded = false;
+                });
+                if (data?['addInventoryItem']['success'] == true) {
+                  _resetForm();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(content: Text('Item saved successfully')),
+                  );
+                }
+              },
+            ),
+            builder: (runMutation, result) {
+              // ── Safe category list ─────────────────────────────────────
+              final categoryKeys = _categoryItems.keys
+                  .where((k) => k.trim().isNotEmpty && k != _kAddNew)
+                  .toSet()   // deduplicate
+                  .toList();
+
+              // ── Safe item name list for selected category ──────────────
+              final itemNames = (_categoryItems[_selectedCategory] ?? [])
+                  .where((v) => v.trim().isNotEmpty && v != _kAddNew)
+                  .toSet()
+                  .toList();
+
+              return FadeTransition(
+                opacity: _fadeAnim,
+                child: SingleChildScrollView(
+                  padding: const EdgeInsets.symmetric(
+                      horizontal: 22, vertical: 12),
+                  child: Form(
+                    key: _formKey,
+                    child: Column(
+                      crossAxisAlignment: CrossAxisAlignment.start,
+                      children: [
+
+                        _sectionLabel('Item Details'),
+
+                        // ── Category ───────────────────────────────────────
+                        const SizedBox(height: 14),
+                        _sectionLabel('Category'),
+                        const SizedBox(height: 8),
+                        _dropdownContainer(
+                          child: DropdownButtonFormField<String>(
+                            value: _safeValue(_selectedCategory, categoryKeys),
+                            hint: const Text('Select or add category',
+                                style: TextStyle(color: Colors.white38)),
+                            dropdownColor: const Color(0xFF1A2035),
+                            style: const TextStyle(color: Colors.white),
+                            items: [
+                              ...categoryKeys.map((cat) =>
+                                  DropdownMenuItem(value: cat, child: Text(cat))),
+                              const DropdownMenuItem(
+                                  value: _kAddNew, child: Text('+ Add New')),
+                            ],
+                            onChanged: (value) {
+                              if (value == _kAddNew) {
+                                _showAddDialog(
+                                  label: 'Category',
+                                  onConfirm: (newCat) {
+                                    setState(() {
+                                      _categoryItems[newCat] = [];
+                                      _selectedCategory = newCat;
+                                      _selectedItemName = null;
+                                    });
+                                    _saveOptions();
+                                  },
+                                );
+                              } else {
+                                setState(() {
+                                  _selectedCategory = value;
+                                  _selectedItemName = null;
+                                });
+                              }
+                            },
+                          ),
+                        ),
+
+                        // ── Item Name ──────────────────────────────────────
+                        const SizedBox(height: 14),
+                        _sectionLabel('Item Name'),
+                        const SizedBox(height: 8),
+                        _dropdownContainer(
+                          child: DropdownButtonFormField<String>(
+                            value: _safeValue(_selectedItemName, itemNames),
+                            hint: const Text('Select or add item name',
+                                style: TextStyle(color: Colors.white38)),
+                            dropdownColor: const Color(0xFF1A2035),
+                            style: const TextStyle(color: Colors.white),
+                            items: [
+                              ...itemNames.map((item) =>
+                                  DropdownMenuItem(value: item, child: Text(item))),
+                              const DropdownMenuItem(
+                                  value: _kAddNew, child: Text('+ Add New')),
+                            ],
+                            onChanged: (value) {
+                              if (value == _kAddNew) {
+                                _showAddDialog(
+                                  label: 'Item Name',
+                                  onConfirm: (newItem) {
+                                    setState(() {
+                                      (_categoryItems[_selectedCategory!] ??= [])
+                                          .add(newItem);
+                                      _selectedItemName = newItem;
+                                    });
+                                    _saveOptions();
+                                  },
+                                );
+                              } else {
+                                setState(() => _selectedItemName = value);
+                              }
+                            },
+                          ),
+                        ),
+
+                        // ── Size ───────────────────────────────────────────
+                        const SizedBox(height: 14),
+                        _sectionLabel('Size'),
+                        const SizedBox(height: 8),
+                        _dropdownContainer(
+                          child: DropdownButtonFormField<String>(
+                            value: _safeValue(_selectedSize, _sizes),
+                            hint: const Text('Select or add size',
+                                style: TextStyle(color: Colors.white38)),
+                            dropdownColor: const Color(0xFF1A2035),
+                            style: const TextStyle(color: Colors.white),
+                            items: _buildItems(_sizes),
+                            onChanged: (value) {
+                              if (value == _kAddNew) {
+                                _showAddDialog(
+                                  label: 'Size',
+                                  onConfirm: (newSize) {
+                                    setState(() {
+                                      _sizes.add(newSize);
+                                      _selectedSize = newSize;
+                                    });
+                                    _saveOptions();
+                                  },
+                                );
+                              } else {
+                                setState(() => _selectedSize = value);
+                              }
+                            },
+                          ),
+                        ),
+
+                        // ── Length ─────────────────────────────────────────
+                        const SizedBox(height: 14),
+                        _sectionLabel('Length'),
+                        const SizedBox(height: 8),
+                        _dropdownContainer(
+                          child: DropdownButtonFormField<String>(
+                            value: _safeValue(_selectedLength, _lengths),
+                            hint: const Text('Select or add length',
+                                style: TextStyle(color: Colors.white38)),
+                            dropdownColor: const Color(0xFF1A2035),
+                            style: const TextStyle(color: Colors.white),
+                            items: _buildItems(_lengths),
+                            onChanged: (value) {
+                              if (value == _kAddNew) {
+                                _showAddDialog(
+                                  label: 'Length',
+                                  onConfirm: (newLength) {
+                                    setState(() {
+                                      _lengths.add(newLength);
+                                      _selectedLength = newLength;
+                                    });
+                                    _saveOptions();
+                                  },
+                                );
+                              } else {
+                                setState(() => _selectedLength = value);
+                              }
+                            },
+                          ),
+                        ),
+
+                        // ── Quantity & Location ────────────────────────────
+                        const SizedBox(height: 14),
+                        _sectionLabel('Quantity & Location'),
+                        const SizedBox(height: 8),
+
+                        Container(
+                          padding: const EdgeInsets.symmetric(horizontal: 12),
+                          decoration: BoxDecoration(
+                            color: const Color(0xFF1A2035),
+                            borderRadius: BorderRadius.circular(14),
+                            border: Border.all(color: const Color(0xFFC9A227)),
+                          ),
+                          child: Row(
+                            children: [
+                              IconButton(
+                                icon: const Icon(Icons.remove,
+                                    color: Color(0xFFC9A227)),
+                                onPressed: () {
+                                  int current =
+                                      int.tryParse(_quantityCtrl.text) ?? 1;
+                                  if (current > 1) current--;
+                                  _quantityCtrl.text = current.toString();
+                                  setState(() => _quantity = current);
+                                },
+                              ),
+                              Expanded(
+                                child: TextField(
+                                  controller: _quantityCtrl,
+                                  keyboardType: TextInputType.number,
+                                  textAlign: TextAlign.center,
+                                  style: const TextStyle(color: Colors.white),
+                                  decoration: const InputDecoration(
+                                      border: InputBorder.none),
+                                  onChanged: (value) {
+                                    final val = int.tryParse(value);
+                                    if (val != null && val > 0) {
+                                      setState(() => _quantity = val);
+                                    }
+                                  },
+                                ),
+                              ),
+                              IconButton(
+                                icon: const Icon(Icons.add,
+                                    color: Color(0xFFC9A227)),
+                                onPressed: () {
+                                  int current =
+                                      int.tryParse(_quantityCtrl.text) ?? 1;
+                                  current++;
+                                  _quantityCtrl.text = current.toString();
+                                  setState(() => _quantity = current);
+                                },
+                              ),
+                            ],
+                          ),
+                        ),
+
+                        const SizedBox(height: 14),
+                        _buildField(
+                          controller: _locationCtrl,
+                          label: 'Location',
+                          icon: Icons.location_on_outlined,
+                          validator: (v) =>
+                              v == null || v.isEmpty ? 'Enter location' : null,
+                        ),
+
+                        const SizedBox(height: 14),
+                        _buildField(
+                          controller: _descCtrl,
+                          label: 'Description',
+                          icon: Icons.description_outlined,
+                          validator: (v) => v == null || v.isEmpty
+                              ? 'Enter description'
+                              : null,
+                        ),
+
+                        // ── Image ──────────────────────────────────────────
+                        const SizedBox(height: 20),
+                        _sectionLabel('Image'),
+                        const SizedBox(height: 10),
+
+                        GestureDetector(
+                          onTap: _pickImage,
+                          child: Container(
+                            width: double.infinity,
+                            height: 150,
+                            decoration: BoxDecoration(
+                              color: const Color(0xFF1A2035),
+                              borderRadius: BorderRadius.circular(16),
+                            ),
+                            child: _pickedImage != null
+                                ? ClipRRect(
+                                    borderRadius: BorderRadius.circular(16),
+                                    child: Image.file(
+                                        File(_pickedImage!.path),
+                                        fit: BoxFit.cover),
+                                  )
+                                : const Center(
+                                    child: Text('Tap to upload image',
+                                        style: TextStyle(
+                                            color: Colors.white54)),
+                                  ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 30),
+
+                        SizedBox(
+                          width: double.infinity,
+                          height: 55,
+                          child: ElevatedButton(
+                            onPressed: _loading
+                                ? null
+                                : () => _submitForm(runMutation),
+                            style: ElevatedButton.styleFrom(
+                              backgroundColor: const Color(0xFFC9A227),
+                              shape: RoundedRectangleBorder(
+                                  borderRadius: BorderRadius.circular(14)),
+                            ),
+                            child: _loading
+                                ? const CircularProgressIndicator(
+                                    color: Colors.white)
+                                : Text(
+                                    'Submit',
+                                    style: GoogleFonts.outfit(
+                                      fontSize: 16,
+                                      fontWeight: FontWeight.w700,
+                                      color: Colors.white,
+                                    ),
+                                  ),
+                          ),
+                        ),
+
+                        const SizedBox(height: 20),
+                      ],
+                    ),
+                  ),
+                ),
+              );
+            }, // end Mutation builder
+          );
+        }, // end Query builder
+      ),
+    );
+  }
+
+  // ─── Reusable dropdown container ────────────────────────────────────────────
+  Widget _dropdownContainer({required Widget child}) {
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12),
+      decoration: BoxDecoration(
+        color: const Color(0xFF1A2035),
+        borderRadius: BorderRadius.circular(14),
+      ),
+      child: child,
+    );
+  }
+
+  Widget _sectionLabel(String text) {
+    return Text(
+      text,
+      style: GoogleFonts.outfit(
+        fontSize: 13,
+        fontWeight: FontWeight.w600,
+        color: const Color(0xFFC9A227),
+      ),
+    );
+  }
+
+  Widget _buildField({
+    required TextEditingController controller,
+    required String label,
+    required IconData icon,
+    String? Function(String?)? validator,
+  }) {
+    return TextFormField(
+      controller: controller,
+      style: const TextStyle(color: Colors.white),
+      validator: validator,
+      decoration: InputDecoration(
+        labelText: label,
+        labelStyle: const TextStyle(color: Colors.white54),
+        prefixIcon: Icon(icon, color: Colors.white38),
+        filled: true,
+        fillColor: const Color(0xFF1A2035),
+        border: OutlineInputBorder(
+          borderRadius: BorderRadius.circular(14),
+          borderSide: BorderSide.none,
+        ),
+      ),
+    );
+  }
+}
