@@ -1,0 +1,25 @@
+import 'package:graphql_flutter/graphql_flutter.dart';
+import 'package:flutter/material.dart';
+
+// Change this to your machine's local IP if running on a physical device
+
+const String backendUrl = 'http://192.168.29.113:8000/graphql/';
+
+ValueNotifier<GraphQLClient> graphQLClient = ValueNotifier(
+  GraphQLClient(
+    link: HttpLink(backendUrl),
+    cache: GraphQLCache(store: HiveStore()),
+  ),
+);
+
+// Returns a client with the JWT token attached
+ValueNotifier<GraphQLClient> authGraphQLClient(String token) {
+  final authLink = AuthLink(getToken: () async => 'JWT $token');
+  final link = authLink.concat(HttpLink(backendUrl));
+  return ValueNotifier(
+    GraphQLClient(
+      link: link,
+      cache: GraphQLCache(store: HiveStore()),
+    ),
+  );
+}
