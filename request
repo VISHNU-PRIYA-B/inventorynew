@@ -1,0 +1,556 @@
+import 'package:flutter/material.dart';
+import 'package:graphql_flutter/graphql_flutter.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+// ─── GraphQL ─────────────────────────────────────────
+
+const String _requestMutation = r'''
+mutation CreateInventoryRequest(
+  $category: String!
+  $itemName: String!
+  $size: String!
+  $length: String!
+  $quantity: Int!
+  $description: String
+  $department: String!
+) {
+  createInventoryRequest(
+    category: $category
+    itemName: $itemName
+    size: $size
+    length: $length
+    quantity: $quantity
+    description: $description
+    department: $department 
+  ) {
+    success
+    message
+  }
+}
+''';
+
+const String _inventoryQuery = r'''
+query {
+  inventoryItems {
+    itemName
+    itemType
+    size
+    length
+    quantity
+  }
+}
+''';
+
+// ─── CONSTANTS ───────────────────────────────────────
+const kGold = Color(0xFFC9A227);
+const kBg = Color(0xFF0A0E1A);
+const kCard = Color(0xFF1A2035);
+
+// ─── SCREEN ─────────────────────────────────────────
+
+class RequestScreen extends StatefulWidget {
+  const RequestScreen({super.key});
+
+  @override
+  State<RequestScreen> createState() => _RequestScreenState();
+}
+
+class _RequestScreenState extends State<RequestScreen> {
+  int _availableQty = 0;
+  final _descCtrl = TextEditingController();
+  final _quantityCtrl = TextEditingController(text: '1'); // ✅ NEW
+
+  String? _selectedCategory;
+  String? _selectedItem;
+  String _size = '';
+  String _length = '';
+  int _quantity = 1;
+  bool _loading = false;
+
+  @override
+  void dispose() {
+    _descCtrl.dispose();
+    _quantityCtrl.dispose(); // ✅ NEW
+    super.dispose();
+  }
+
+  // ─── UI HELPERS ───────────────────────────────────
+
+  Widget _title(String text) {
+    return Padding(
+      padding: const EdgeInsets.only(bottom: 8, left: 4),
+      child: Text(
+        text,
+        style: GoogleFonts.outfit(
+          color: kGold,
+          fontSize: 14,
+          fontWeight: FontWeight.w600,
+          letterSpacing: 0.5,
+        ),
+      ),
+    );
+  }
+
+  Widget _cardDropdown({
+    required String? value,
+    required List<String> items,
+    required Function(String?) onChanged,
+  }) {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 14),
+      decoration: BoxDecoration(
+        color: kCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: DropdownButton<String>(
+        value: items.contains(value) ? value : null,
+        isExpanded: true,
+        dropdownColor: kCard,
+        underline: const SizedBox(),
+        icon: const Icon(Icons.keyboard_arrow_down, color: kGold),
+        hint: Text(
+          "Select",
+          style: GoogleFonts.outfit(color: Colors.white38, fontSize: 14),
+        ),
+        items: items
+            .map((e) => DropdownMenuItem(
+                  value: e,
+                  child: Text(
+                    e,
+                    style:
+                        GoogleFonts.outfit(color: Colors.white, fontSize: 14),
+                  ),
+                ))
+            .toList(),
+        onChanged: onChanged,
+      ),
+    );
+  }
+
+  // ✅ UPDATED: quantity box with input field
+  Widget _quantityBox() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+      decoration: BoxDecoration(
+        color: kCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: kGold.withOpacity(0.6)),
+      ),
+      child: Row(
+        children: [
+          // ── Minus Button ──
+          IconButton(
+            icon: const Icon(Icons.remove_circle_outline, color: kGold),
+            onPressed: () {
+              if (_quantity > 1) {
+                setState(() {
+                  _quantity--;
+                  _quantityCtrl.text = _quantity.toString();
+                });
+              }
+            },
+          ),
+
+          // ── Input Field ──
+          Expanded(
+            child: TextField(
+              controller: _quantityCtrl,
+              keyboardType: TextInputType.number,
+              textAlign: TextAlign.center,
+              style: GoogleFonts.outfit(
+                fontSize: 20,
+                color: Colors.white,
+                fontWeight: FontWeight.bold,
+              ),
+              decoration: const InputDecoration(
+                border: InputBorder.none,
+                contentPadding: EdgeInsets.zero,
+              ),
+              onChanged: (v) {
+                final parsed = int.tryParse(v);
+                if (parsed != null && parsed >= 1) {
+                  setState(() => _quantity = parsed);
+                } else if (v.isEmpty) {
+                  setState(() => _quantity = 1);
+                }
+              },
+            ),
+          ),
+
+          // ── Plus Button ──
+          IconButton(
+            icon: const Icon(Icons.add_circle_outline, color: kGold),
+            onPressed: () {
+              setState(() {
+                _quantity++;
+                _quantityCtrl.text = _quantity.toString();
+              });
+            },
+          ),
+        ],
+      ),
+    );
+  }
+
+  Widget _descriptionBox() {
+    return Container(
+      margin: const EdgeInsets.only(bottom: 18),
+      padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 4),
+      decoration: BoxDecoration(
+        color: kCard,
+        borderRadius: BorderRadius.circular(14),
+        border: Border.all(color: Colors.white12),
+      ),
+      child: TextField(
+        controller: _descCtrl,
+        maxLines: 3,
+        style: GoogleFonts.outfit(color: Colors.white, fontSize: 14),
+        decoration: InputDecoration(
+          hintText: "Why do you need this item?",
+          hintStyle: GoogleFonts.outfit(color: Colors.white38, fontSize: 14),
+          border: InputBorder.none,
+        ),
+      ),
+    );
+  }
+
+  Widget _submitButton(Function runMutation) {
+    return SizedBox(
+      width: double.infinity,
+      child: ElevatedButton(
+        style: ElevatedButton.styleFrom(
+          backgroundColor: kGold,
+          padding: const EdgeInsets.symmetric(vertical: 16),
+          shape: RoundedRectangleBorder(
+            borderRadius: BorderRadius.circular(16),
+          ),
+          elevation: 4,
+          shadowColor: kGold.withOpacity(0.4),
+        ),
+        onPressed: _loading
+            ? null
+            : () async {
+                if (_selectedCategory == null ||
+                    _selectedItem == null ||
+                    _size.isEmpty ||
+                    _length.isEmpty) {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    const SnackBar(
+                        content: Text("Fill all required fields")),
+                  );
+                  return;
+                }
+
+                final prefs = await SharedPreferences.getInstance();
+                final dept = prefs.getString('department') ?? '';
+
+                setState(() => _loading = true);
+
+                runMutation({
+                  'category': _selectedCategory!,
+                  'itemName': _selectedItem!,
+                  'size': _size,
+                  'length': _length,
+                  'quantity': _quantity,
+                  'description': _descCtrl.text,
+                  'department': dept,
+                });
+              },
+        child: _loading
+            ? const SizedBox(
+                height: 22,
+                width: 22,
+                child: CircularProgressIndicator(
+                    color: Colors.black, strokeWidth: 2.5),
+              )
+            : Text(
+                "Submit Request",
+                style: GoogleFonts.outfit(
+                  color: Colors.black,
+                  fontWeight: FontWeight.bold,
+                  fontSize: 16,
+                ),
+              ),
+      ),
+    );
+  }
+
+  // ─── MAIN UI ───────────────────────────────────────
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kBg,
+      appBar: AppBar(
+        backgroundColor: kBg,
+        elevation: 0,
+        iconTheme: const IconThemeData(color: Colors.white),
+        title: Text(
+          'Request Item',
+          style: GoogleFonts.outfit(
+            color: kGold,
+            fontWeight: FontWeight.bold,
+            fontSize: 20,
+          ),
+        ),
+      ),
+      body: Query(
+        options: QueryOptions(
+          document: gql(_inventoryQuery),
+          fetchPolicy: FetchPolicy.networkOnly,
+        ),
+        builder: (result, {refetch, fetchMore}) {
+          if (result.isLoading) {
+            return const Center(
+                child: CircularProgressIndicator(color: kGold));
+          }
+
+          if (result.hasException) {
+            return Center(
+              child: Text(result.exception.toString(),
+                  style: const TextStyle(color: Colors.red)),
+            );
+          }
+
+          final items = (result.data?['inventoryItems'] as List?)
+                  ?.where((e) => e != null)
+                  .toList() ??
+              [];
+
+          final categories = items
+              .map<String>((e) => e['itemType']?.toString() ?? '')
+              .where((e) => e.isNotEmpty)
+              .toSet()
+              .toList();
+
+          final filtered = items
+              .where((e) => e['itemType']?.toString() == _selectedCategory)
+              .toList();
+
+          return Mutation(
+            options: MutationOptions(
+              document: gql(_requestMutation),
+              onCompleted: (data) {
+                setState(() => _loading = false);
+                if (data == null) return;
+                final result = data['createInventoryRequest'];
+                if (result?['success'] == true) {
+                  // ✅ Reset form including quantity
+                  setState(() {
+                    _selectedCategory = null;
+                    _selectedItem = null;
+                    _size = '';
+                    _length = '';
+                    _quantity = 1;
+                    _quantityCtrl.text = '1'; // ✅ Reset input field
+                  });
+                  _descCtrl.clear();
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content:
+                          Text(result?['message'] ?? 'Request submitted!'),
+                      backgroundColor: Colors.green,
+                    ),
+                  );
+                } else {
+                  ScaffoldMessenger.of(context).showSnackBar(
+                    SnackBar(
+                      content:
+                          Text(result?['message'] ?? 'Submission failed'),
+                      backgroundColor: Colors.redAccent,
+                    ),
+                  );
+                }
+              },
+              onError: (error) {
+                setState(() => _loading = false);
+                ScaffoldMessenger.of(context).showSnackBar(
+                  SnackBar(
+                    content: Text('Error: ${error.toString()}'),
+                    backgroundColor: Colors.redAccent,
+                  ),
+                );
+              },
+            ),
+            builder: (runMutation, result) {
+              return SingleChildScrollView(
+                padding: const EdgeInsets.all(20),
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+
+                    // ── Item Details Header ──
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 20),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: kCard,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: kGold.withOpacity(0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: kGold.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.inventory_2_outlined,
+                                color: kGold, size: 22),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Item Details',
+                            style: GoogleFonts.outfit(
+                              color: kGold,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+
+                    _title("Category"),
+                    _cardDropdown(
+                      value: _selectedCategory,
+                      items: categories,
+                      onChanged: (v) {
+                        setState(() {
+                          _selectedCategory = v;
+                          _selectedItem = null;
+                          _size = '';
+                          _length = '';
+                        });
+                      },
+                    ),
+
+                    _title("Item Name"),
+                    _cardDropdown(
+                      value: _selectedItem,
+                      items: filtered
+                          .map<String>(
+                              (i) => i['itemName']?.toString() ?? '')
+                          .where((e) => e.isNotEmpty)
+                          .toSet()      
+                          .toList(),
+                      onChanged: (v) => setState(() => _selectedItem = v),
+                    ),
+
+                    _title("Size"),
+                    _cardDropdown(
+                      value: _size.isEmpty ? null : _size,
+                      items: filtered
+                          .where((e) =>
+                              e['itemName']?.toString() == _selectedItem)
+                          .map<String>(
+                              (e) => e['size']?.toString() ?? '')
+                          .where((e) => e.isNotEmpty)
+                          .toSet()
+                          .toList(),
+                      onChanged: (v) => setState(() => _size = v ?? ''),
+                    ),
+
+                   _title("Length"),
+                    _cardDropdown(
+                      value: _length.isEmpty ? null : _length,
+                      items: filtered
+                          .where((e) =>
+                              e['itemName']?.toString() == _selectedItem &&
+                              e['size']?.toString() == _size)
+                          .map<String>((e) => e['length']?.toString() ?? '')
+                          .where((e) => e.isNotEmpty)
+                          .toSet()
+                          .toList(),
+                      onChanged: (value) {
+                        setState(() {
+                          _length = value ?? '';
+
+                          final selected = filtered.firstWhere(
+                            (e) =>
+                                e['itemName'] == _selectedItem &&
+                                e['size'] == _size &&
+                                e['length'] == _length,
+                            orElse: () => null,
+                          );
+
+                          _availableQty =
+                              selected != null ? selected['quantity'] ?? 0 : 0;
+                        });
+                      },
+                    ),
+
+                    // ── Quantity & Details Header ──
+                    Container(
+                      margin: const EdgeInsets.only(bottom: 8),
+                      padding: const EdgeInsets.all(16),
+                      decoration: BoxDecoration(
+                        color: kCard,
+                        borderRadius: BorderRadius.circular(16),
+                        border: Border.all(color: kGold.withOpacity(0.3)),
+                      ),
+                      child: Row(
+                        children: [
+                          Container(
+                            padding: const EdgeInsets.all(8),
+                            decoration: BoxDecoration(
+                              color: kGold.withOpacity(0.15),
+                              borderRadius: BorderRadius.circular(10),
+                            ),
+                            child: const Icon(Icons.format_list_numbered,
+                                color: kGold, size: 22),
+                          ),
+                          const SizedBox(width: 12),
+                          Text(
+                            'Quantity & Details',
+                            style: GoogleFonts.outfit(
+                              color: kGold,
+                              fontSize: 16,
+                              fontWeight: FontWeight.bold,
+                            ),
+                          ),
+                        ],
+                      ),
+                    ),
+                                                            
+
+                    if (_availableQty > 0)
+                      Padding(
+                        padding: const EdgeInsets.only(top: 8, left: 4),
+                        child: Text(
+                          _availableQty == 0
+                              ? "Out of Stock"
+                              : "Available: $_availableQty",
+                          style: TextStyle(
+                            color: _availableQty == 0 ? Colors.red : Colors.green,
+                            fontWeight: FontWeight.bold,
+                            fontSize: 17,
+                          ),
+                        ),
+                      ),
+
+                    const SizedBox(height: 8),
+                    _title("Request Quantity"),
+                    _quantityBox(),
+
+                    _title("Description / Reason"),
+                    _descriptionBox(),
+
+                    const SizedBox(height: 10),
+                    _submitButton(runMutation),
+                    const SizedBox(height: 20),
+                  ],
+                ),
+              );
+            },
+          );
+        },
+      ),
+    );
+  }
+}
