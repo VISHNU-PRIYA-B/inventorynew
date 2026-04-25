@@ -1,0 +1,378 @@
+import 'package:flutter/material.dart';
+import 'package:graphql_flutter/graphql_flutter.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+
+const String getRequestsQuery = r'''
+  query {
+    inventoryRequests {
+      id
+      category
+      itemName
+      size
+      length
+      quantity
+      description
+      status
+      requestedBy {
+        name
+      }
+    }
+  }
+''';
+
+const kGold = Color(0xFFC9A227);
+const kBg = Color(0xFF0A0E1A);
+const kCard = Color(0xFF1A2035);
+
+class UserStatusScreen extends StatefulWidget {
+  const UserStatusScreen({super.key});
+
+  @override
+  State<UserStatusScreen> createState() => _UserStatusScreenState();
+}
+
+class _UserStatusScreenState extends State<UserStatusScreen> {
+  String _userName = "";
+  String _selectedStatus = "ALL";
+
+  @override
+  void initState() {
+    super.initState();
+    _loadUser();
+  }
+
+  Future<void> _loadUser() async {
+    final prefs = await SharedPreferences.getInstance();
+    final name = prefs.getString('user_name');
+
+    print("LOADED FROM PREFS: $name");
+
+    setState(() {
+      _userName = name ?? '';
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: kBg,
+      appBar: AppBar(
+        backgroundColor: kBg,
+        title: Text(
+          "My Requests",
+          style: GoogleFonts.outfit(
+            color: kGold,
+            fontWeight: FontWeight.bold,
+          ),
+        ),
+      ),
+      body: Query(
+        options: QueryOptions(
+          document: gql(getRequestsQuery),
+          fetchPolicy: FetchPolicy.networkOnly,
+        ),
+        builder: (result, {refetch, fetchMore}) {
+          if (result.isLoading) {
+            return const Center(child: CircularProgressIndicator());
+          }
+
+          if (result.hasException) {
+            return Center(
+              child: Text(
+                result.exception.toString(),
+                style: const TextStyle(color: Colors.red),
+              ),
+            );
+          }
+
+          final List allRequests =
+              result.data?['inventoryRequests'] ?? [];
+
+          // ✅ FILTER USER + STATUS
+          final userRequests = allRequests.where((r) {
+            final requestedBy = r['requestedBy'];
+            final name = requestedBy != null ? requestedBy['name'] : '';
+
+            final status =
+                r['status']?.toString().toUpperCase() ?? '';
+
+            final isUserMatch =
+                name.toString().trim().toLowerCase() ==
+                    _userName.trim().toLowerCase();
+
+            final isStatusMatch = _selectedStatus == "ALL" ||
+                status == _selectedStatus;
+
+            return isUserMatch && isStatusMatch;
+          }).toList();
+
+          return Column(
+            children: [
+              // 🔥 STATUS FILTER BUTTONS
+              Padding(
+                padding: const EdgeInsets.all(12),
+                child: Row(
+                  mainAxisAlignment:
+                      MainAxisAlignment.spaceEvenly,
+                  children: [
+                    _statusButton("PENDING"),
+                    _statusButton("ACCEPTED"),
+                    _statusButton("REJECTED"),
+                    _statusButton("ALL"),
+                  ],
+                ),
+              ),
+
+              // 🔥 LIST
+              Expanded(
+                child: userRequests.isEmpty
+                    ? Center(
+                        child: Text(
+                          "No requests found",
+                          style: GoogleFonts.outfit(
+                              color: Colors.white54),
+                        ),
+                      )
+                    : ListView.builder(
+                        padding: const EdgeInsets.all(16),
+                        itemCount: userRequests.length,
+                        itemBuilder: (context, index) {
+                          final req = userRequests[index];
+
+                          final status = req['status']
+                                  ?.toString()
+                                  .toUpperCase() ??
+                              '';
+
+                          final statusColor =
+                              status == 'PENDING'
+                                  ? Colors.orange
+                                  : status == 'ACCEPTED'
+                                      ? Colors.green
+                                      : Colors.red;
+
+                          return Container(
+                            margin: const EdgeInsets.only(
+                                bottom: 14),
+                            padding:
+                                const EdgeInsets.all(16),
+                            decoration: BoxDecoration(
+                              color: kCard,
+                              borderRadius:
+                                  BorderRadius.circular(16),
+                              border: Border.all(
+                                  color: statusColor
+                                      .withOpacity(0.3)),
+                            ),
+                            child: Column(
+                              crossAxisAlignment:
+                                  CrossAxisAlignment.start,
+                              children: [
+                                // HEADER
+                                Row(
+                                  mainAxisAlignment:
+                                      MainAxisAlignment
+                                          .spaceBetween,
+                                  children: [
+                                    Row(
+                                      children: [
+                                        Icon(
+                                          status ==
+                                                  'PENDING'
+                                              ? Icons
+                                                  .hourglass_bottom
+                                              : status ==
+                                                      'ACCEPTED'
+                                                  ? Icons
+                                                      .check_circle
+                                                  : Icons
+                                                      .cancel,
+                                          color:
+                                              statusColor,
+                                          size: 20,
+                                        ),
+                                        const SizedBox(
+                                            width: 8),
+                                        Text(
+                                          req['itemName'] ??
+                                              '',
+                                          style: GoogleFonts
+                                              .outfit(
+                                            color:
+                                                Colors.white,
+                                            fontSize: 16,
+                                            fontWeight:
+                                                FontWeight
+                                                    .bold,
+                                          ),
+                                        ),
+                                      ],
+                                    ),
+                                    Container(
+                                      padding:
+                                          const EdgeInsets
+                                              .symmetric(
+                                              horizontal:
+                                                  10,
+                                              vertical:
+                                                  4),
+                                      decoration:
+                                          BoxDecoration(
+                                        color: statusColor
+                                            .withOpacity(
+                                                0.15),
+                                        borderRadius:
+                                            BorderRadius
+                                                .circular(
+                                                    20),
+                                      ),
+                                      child: Text(
+                                        status,
+                                        style:
+                                            GoogleFonts
+                                                .outfit(
+                                          color:
+                                              statusColor,
+                                          fontSize: 11,
+                                          fontWeight:
+                                              FontWeight
+                                                  .bold,
+                                        ),
+                                      ),
+                                    ),
+                                  ],
+                                ),
+
+                                const SizedBox(height: 10),
+
+                                // INFO
+                                Wrap(
+                                  spacing: 12,
+                                  runSpacing: 4,
+                                  children: [
+                                    _chipInfo('Category',
+                                        req['category'] ??
+                                            '-'),
+                                    _chipInfo('Size',
+                                        req['size'] ?? '-'),
+                                    _chipInfo('Length',
+                                        req['length'] ??
+                                            '-'),
+                                    _chipInfo('Qty',
+                                        req['quantity']
+                                            .toString()),
+                                  ],
+                                ),
+
+                                const SizedBox(height: 6),
+
+                                Text(
+                                  'By: $_userName',
+                                  style:
+                                      GoogleFonts.outfit(
+                                    color:
+                                        Colors.white54,
+                                    fontSize: 12,
+                                  ),
+                                ),
+
+                                if ((req['description'] ??
+                                        '')
+                                    .isNotEmpty)
+                                  Padding(
+                                    padding:
+                                        const EdgeInsets
+                                            .only(top: 4),
+                                    child: Text(
+                                      'Note: ${req['description']}',
+                                      style:
+                                          GoogleFonts
+                                              .outfit(
+                                        color: Colors
+                                            .white38,
+                                        fontSize: 12,
+                                      ),
+                                    ),
+                                  ),
+
+                                const SizedBox(height: 12),
+
+                                Text(
+                                  "Your request is $status",
+                                  style:
+                                      GoogleFonts.outfit(
+                                    color: statusColor,
+                                    fontWeight:
+                                        FontWeight.bold,
+                                    fontSize: 13,
+                                  ),
+                                ),
+                              ],
+                            ),
+                          );
+                        },
+                      ),
+              ),
+            ],
+          );
+        },
+      ),
+    );
+  }
+
+  // 🔹 STATUS BUTTON
+  Widget _statusButton(String status) {
+    final isSelected = _selectedStatus == status;
+
+    return GestureDetector(
+      onTap: () {
+        setState(() {
+          _selectedStatus = status;
+        });
+      },
+      child: Container(
+        padding:
+            const EdgeInsets.symmetric(horizontal: 14, vertical: 8),
+        decoration: BoxDecoration(
+          color: isSelected ? kGold : Colors.transparent,
+          borderRadius: BorderRadius.circular(20),
+          border: Border.all(color: kGold.withOpacity(0.4)),
+        ),
+        child: Text(
+          status,
+          style: GoogleFonts.outfit(
+            color: isSelected ? Colors.black : Colors.white70,
+            fontSize: 12,
+            fontWeight: FontWeight.w600,
+          ),
+        ),
+      ),
+    );
+  }
+
+  // 🔹 INFO TEXT
+  Widget _chipInfo(String label, String value) {
+    return RichText(
+      text: TextSpan(
+        children: [
+          TextSpan(
+            text: '$label: ',
+            style: GoogleFonts.outfit(
+              color: Colors.white38,
+              fontSize: 12,
+            ),
+          ),
+          TextSpan(
+            text: value,
+            style: GoogleFonts.outfit(
+              color: Colors.white,
+              fontSize: 12,
+              fontWeight: FontWeight.bold,
+            ),
+          ),
+        ],
+      ),
+    );
+  }
+}
