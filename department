@@ -1,0 +1,145 @@
+import 'package:flutter/material.dart';
+import 'package:google_fonts/google_fonts.dart';
+import 'package:shared_preferences/shared_preferences.dart';
+import 'home_screen.dart';
+import 'user_home_screen.dart';
+
+class DepartmentScreen extends StatelessWidget {
+  const DepartmentScreen({super.key});
+
+ Future<void> _navigateTo(BuildContext context, String department) async {
+  final prefs = await SharedPreferences.getInstance();
+
+  // ✅ SAVE department (THIS IS THE MAIN FIX)
+  await prefs.setString('department', department);
+
+  final isAdmin = prefs.getBool('is_admin') ?? false;
+
+  if (!context.mounted) return;
+
+  Navigator.of(context).pushReplacement(
+    PageRouteBuilder(
+      pageBuilder: (_, a, __) =>
+          isAdmin ? const HomeScreen() : const UserHomeScreen(),
+      transitionsBuilder: (_, anim, __, child) =>
+          FadeTransition(opacity: anim, child: child),
+      transitionDuration: const Duration(milliseconds: 400),
+    ),
+  );
+}
+    // Electronics and Admin — wire to their own screens when ready
+  
+
+  @override
+  Widget build(BuildContext context) {
+    return Scaffold(
+      backgroundColor: const Color(0xFF0A0E1A),
+      body: SafeArea(
+        child: Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 28, vertical: 40),
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.start,
+            children: [
+              const SizedBox(height: 30),
+              Text(
+                'Select Department',
+                style: GoogleFonts.outfit(
+                  fontSize: 28,
+                  fontWeight: FontWeight.w800,
+                  color: Colors.white,
+                ),
+              ),
+              const SizedBox(height: 8),
+              Text(
+                'Choose your department to continue',
+                style: GoogleFonts.outfit(fontSize: 14, color: Colors.white54),
+              ),
+              const SizedBox(height: 48),
+
+              _DeptButton(
+                label: 'Mechanical',
+                icon: Icons.precision_manufacturing_rounded,
+                color: const Color(0xFFC9A227),
+                onTap: () => _navigateTo(context, 'Mechanical'),
+              ),
+              const SizedBox(height: 16),
+              _DeptButton(
+                label: 'Electronics',
+                icon: Icons.memory_rounded,
+                color: const Color(0xFF4FC3F7),
+                onTap: () => _navigateTo(context, 'Electronics'),
+              ),
+              const SizedBox(height: 16),
+              _DeptButton(
+                label: 'Admin',
+                icon: Icons.admin_panel_settings_rounded,
+                color: const Color(0xFF9B5DE5),
+                onTap: () => _navigateTo(context, 'Admin'),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+}
+
+class _DeptButton extends StatelessWidget {
+  final String label;
+  final IconData icon;
+  final Color color;
+  final VoidCallback onTap;
+
+  const _DeptButton({
+    required this.label,
+    required this.icon,
+    required this.color,
+    required this.onTap,
+  });
+
+  @override
+  Widget build(BuildContext context) {
+    return GestureDetector(
+      onTap: onTap,
+      child: Container(
+        width: double.infinity,
+        height: 68,
+        decoration: BoxDecoration(
+          color: const Color(0xFF111827),
+          borderRadius: BorderRadius.circular(18),
+          border: Border.all(color: color.withOpacity(0.4), width: 1.5),
+          boxShadow: [
+            BoxShadow(
+              color: color.withOpacity(0.15),
+              blurRadius: 20,
+              offset: const Offset(0, 6),
+            ),
+          ],
+        ),
+        child: Row(
+          children: [
+            const SizedBox(width: 20),
+            Container(
+              width: 40,
+              height: 40,
+              decoration: BoxDecoration(
+                color: color.withOpacity(0.15),
+                borderRadius: BorderRadius.circular(10),
+              ),
+              child: Icon(icon, color: color, size: 22),
+            ),
+            const SizedBox(width: 16),
+            Text(label,
+                style: GoogleFonts.outfit(
+                    fontSize: 17,
+                    fontWeight: FontWeight.w600,
+                    color: Colors.white)),
+            const Spacer(),
+            Icon(Icons.arrow_forward_ios_rounded, color: color, size: 16),
+            const SizedBox(width: 20),
+          ],
+        ),
+      ),
+    );
+  }
+}
