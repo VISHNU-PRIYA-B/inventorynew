@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:graphql_flutter/graphql_flutter.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
+
 const String getInventoryQuery = r'''
   query {
     inventoryItems {
@@ -16,6 +17,8 @@ const String getInventoryQuery = r'''
     issuedItems {
       id
       itemName
+      size
+      length
       status
       issuedAt
       issuedTo {
@@ -26,30 +29,34 @@ const String getInventoryQuery = r'''
 ''';
 
 const String updateInventoryMutation = r'''
-  mutation UpdateInventoryItem(
-    $itemName: String!
-    $department: String!
-    $newItemName: String
-    $itemType: String
-    $size: String
-    $length: String
-    $quantity: Int
-    $location: String
+ mutation UpdateInventoryItem(
+  $itemName: String!
+  $oldSize: String!
+  $oldLength: String!
+  $department: String!
+  $newItemName: String
+  $itemType: String
+  $size: String
+  $length: String
+  $quantity: Int
+  $location: String
+) {
+  updateInventoryItem(
+    itemName: $itemName
+    oldSize: $oldSize
+    oldLength: $oldLength
+    department: $department
+    newItemName: $newItemName
+    itemType: $itemType
+    size: $size
+    length: $length
+    quantity: $quantity
+    location: $location
   ) {
-    updateInventoryItem(
-      itemName: $itemName
-      department: $department
-      newItemName: $newItemName
-      itemType: $itemType
-      size: $size
-      length: $length
-      quantity: $quantity
-      location: $location
-    ) {
-      success
-      message
-    }
+    success
+    message
   }
+}
 ''';
 
 const String deleteInventoryMutation = r'''
@@ -72,7 +79,7 @@ class _InventoryListScreenState extends State<InventoryListScreen> {
   bool _isAdmin = false;
   String _department = '';
 
-  final String baseUrl = "http://192.168.29.113:8000";
+  final String baseUrl = "https://VishnuPriya123.pythonanywhere.com";
 
   @override
   void initState() {
@@ -155,6 +162,8 @@ class _InventoryListScreenState extends State<InventoryListScreen> {
                 onPressed: () {
                   runMutation({
                     'itemName':    item['itemName'],
+                    'oldSize': item['size'],           // ✅ ADD THIS
+                    'oldLength': item['length'], 
                     'department':  _department,
                     'newItemName': itemNameCtrl.text.trim(),
                     'itemType':    itemTypeCtrl.text.trim(),
@@ -302,7 +311,10 @@ class _InventoryListScreenState extends State<InventoryListScreen> {
                 ? issuedTo['name'].toString().trim()
                 : '';
             if (status == 'accepted' && name.isNotEmpty) {
-              acceptedUserMap[issuedItem['itemName'] ?? ''] = name;
+              final key =
+"${issuedItem['itemName']}_${issuedItem['size']}_${issuedItem['length']}";
+
+acceptedUserMap[key] = name;
             }
           }
 
@@ -323,7 +335,10 @@ class _InventoryListScreenState extends State<InventoryListScreen> {
           final rows = items.map<DataRow>((item) {
             final itemName  = item['itemName'] ?? '';
             final imagePath = item['imagePath'];
-            final userName  = acceptedUserMap[itemName] ?? '-';
+            final key =
+            "${itemName}_${item['size']}_${item['length']}";
+
+            final userName = acceptedUserMap[key] ?? '-';
 
             return DataRow(cells: [
               DataCell(Text(itemName,
